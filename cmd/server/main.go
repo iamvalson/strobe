@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/iamvalson/strobe/internal/config"
+	"github.com/iamvalson/strobe/internal/probe"
 )
 
 
@@ -20,11 +25,44 @@ func main() {
 	}
 
 	fmt.Println("Strobe Monitoring Engine Initialized")
-	fmt.Printf("Running on port: %s\n", cfg.Port)
-	fmt.Printf("Loaded %d monitors from monitors.json\n\n", len(cfg.Monitors))
 
 
-	for _, m := range cfg.Monitors {
-		fmt.Printf("[%s] Target: %s | Every: %v | Timeout: %v\n", m.ID, m.URL, m.Interval, m.Timeout)
+	// Graceful Shutdown
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+
+	fmt.Println("Press Ctrl+C to stop")
+
+
+	// Start ticker as a general pulse
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+
+	for {
+		select {
+		case <- ctx.Done():
+			fmt.Println("\nShutting down Strobe...")
+			return
+		
+		case t := <-ticker.C:
+			fmt.Printf("\n--- Pulse at %v ---\n", t.Format("15:04:05"))
+
+			for _, m := range cfg.Monitors{
+				// Create a specific timeout context for this individual probe
+
+				probeCtx, cancel := context.WithTimeout(ctx, m.Timeout)
+
+				res := probe.HTTP(probeCtx, m)
+				cancel()
+
+				if res.Error != nil {
+					fmt.Printf("[%s] %s -> Error: %v\n", m.ID, m.URL, res.Error)
+				} else {
+					fmt.Printf("[%s] %s -> %d (%v)\n", m.ID, m.URL, res.StatusCode, res.RTT)
+				}
+			}
+		}
 	}
 }
