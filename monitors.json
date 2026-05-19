@@ -1,0 +1,20 @@
+[
+  {
+    "id": "google-main",
+    "url": "https://www.google.com",
+    "interval": "10s",
+    "timeout": "5s"
+  },
+  {
+    "id": "github-status",
+    "url": "https://github.com",
+    "interval": "30s",
+    "timeout": "10s"
+  },
+  {
+    "id": "localhost-test",
+    "url": "http://localhost:8080",
+    "interval": "5s",
+    "timeout": "2s"
+  }
+]
