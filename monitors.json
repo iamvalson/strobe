@@ -12,9 +12,9 @@
     "timeout": "10s"
   },
   {
-    "id": "localhost-test",
-    "url": "http://localhost:8080",
-    "interval": "5s",
-    "timeout": "2s"
+    "id": "duduarts-gallery",
+    "url": "https://duduartsgallery.com",
+    "interval": "20s",
+    "timeout": "5s"
   }
 ]
