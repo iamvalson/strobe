@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,6 +14,7 @@ import (
 	"github.com/iamvalson/strobe/internal/probe"
 	"github.com/iamvalson/strobe/internal/store"
 	"github.com/iamvalson/strobe/internal/worker"
+	"github.com/iamvalson/strobe/internal/ws"
 )
 
 
@@ -48,6 +50,25 @@ func main() {
 	}
 
 
+
+	// Initialize websocket hub
+	hub := ws.NewHub()
+	go hub.Run()
+
+
+	// Set up the HTTP route for WebSockets
+	http.Handle("/ws", hub)
+
+
+	// Start the HTTP server in a goroutine
+	go func() {
+		fmt.Printf("Websocket server listening on: %s/ws\n", cfg.Port)
+		if err := http.ListenAndServe(":"+cfg.Port, nil); err != nil{
+			log.Fatalf("HTTP server failed: %v", err)
+		}
+	}()
+
+
 	// Initialize bin chan using buffered chan so the dispatcher doesn't get stuck if the workers are momentarily busy
 	taskChan := make(chan worker.Task, 100)
 	resultChan := make(chan probe.Result, 100)
@@ -75,6 +96,8 @@ func main() {
 			if err := s.SaveResult(ctx, res); err != nil{
 				fmt.Printf("Database Save Error: %v\n", err)
 			}
+
+			hub.Broadcast(res)
 
 			// Logs
 			if res.Error != nil {
