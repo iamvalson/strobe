@@ -28,9 +28,9 @@ type Config struct {
 
 func Load() (*Config, error) {
 	cfg := &Config{
-		Port:			os.Getenv("PORT"),
+		Port:			getEnv("PORT", "8080"),
 		DatabaseURL: 	os.Getenv("DATABASE_URL"),
-		RedisURL: 		os.Getenv("REDIS_URL"),
+		RedisURL: 		getEnv("REDIS_URL", "localhost:6379"),
 	}
 
 	// Check if the Database URL exists
