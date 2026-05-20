@@ -7,16 +7,18 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/iamvalson/strobe/internal/config"
+	"github.com/iamvalson/strobe/internal/dispatcher"
 	"github.com/iamvalson/strobe/internal/probe"
+	"github.com/iamvalson/strobe/internal/store"
+	"github.com/iamvalson/strobe/internal/worker"
 )
 
 
 func main() {
 	if os.Getenv("DATABASE_URL") == "" {
-		os.Setenv("DATABASE_URL", "postgres://localhost:5432/strobe")
+		os.Setenv("DATABASE_URL", "postgres://user:password@localhost:5432/strobe?sslmode=disable")
 	}
 
 	cfg, err := config.Load()
@@ -31,14 +33,36 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Intialize Store
+	s, err := store.New(ctx, cfg.DatabaseURL, cfg.RedisURL)
+	if err != nil {
+		log.Fatalf("STORE ERROR: %v", err)
+	}
 
-	fmt.Println("Press Ctrl+C to stop")
+	defer s.Close()
+
+	// Run migration
+	fmt.Println("Running database migrations...")
+	if err := s.Migrate(ctx); err != nil {
+		log.Fatalf("MIGRATION ERROR: %v", err)
+	}
 
 
-	// Start ticker as a general pulse
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
+	// Initialize bin chan using buffered chan so the dispatcher doesn't get stuck if the workers are momentarily busy
+	taskChan := make(chan worker.Task, 100)
+	resultChan := make(chan probe.Result, 100)
 
+	// Worker Pool
+	fmt.Println("Starting worker pool")
+	worker.StartPool(ctx, 10, taskChan, resultChan)
+
+	// Dispatcher
+	fmt.Println("Starting Dispatcher")
+	dispatcher.Run(ctx, cfg.Monitors, taskChan)
+
+
+
+	fmt.Println("Strobe Engine is LIVE. Press Ctrl+C to stop")
 
 	for {
 		select {
@@ -46,23 +70,19 @@ func main() {
 			fmt.Println("\nShutting down Strobe...")
 			return
 		
-		case t := <-ticker.C:
-			fmt.Printf("\n--- Pulse at %v ---\n", t.Format("15:04:05"))
-
-			for _, m := range cfg.Monitors{
-				// Create a specific timeout context for this individual probe
-
-				probeCtx, cancel := context.WithTimeout(ctx, m.Timeout)
-
-				res := probe.HTTP(probeCtx, m)
-				cancel()
-
-				if res.Error != nil {
-					fmt.Printf("[%s] %s -> Error: %v\n", m.ID, m.URL, res.Error)
-				} else {
-					fmt.Printf("[%s] %s -> %d (%v)\n", m.ID, m.URL, res.StatusCode, res.RTT)
-				}
+		case res := <-resultChan:
+			// Save to Database
+			if err := s.SaveResult(ctx, res); err != nil{
+				fmt.Printf("Database Save Error: %v\n", err)
 			}
-		}
+
+			// Logs
+			if res.Error != nil {
+				fmt.Printf("[%s] %s -> Error: %v\n", res.MonitorID, res.URL, res.Error)
+			} else{
+				fmt.Printf("[%s] %s -> %d (%v)\n", res.MonitorID, res.URL, res.StatusCode, res.RTT)
+			}
+
 	}
+}
 }
