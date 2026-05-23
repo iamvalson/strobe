@@ -9,6 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/iamvalson/strobe/internal/api"
 	"github.com/iamvalson/strobe/internal/config"
 	"github.com/iamvalson/strobe/internal/dispatcher"
 	"github.com/iamvalson/strobe/internal/probe"
@@ -56,19 +58,6 @@ func main() {
 	go hub.Run()
 
 
-	// Set up the HTTP route for WebSockets
-	http.Handle("/ws", hub)
-
-
-	// Start the HTTP server in a goroutine
-	go func() {
-		fmt.Printf("Websocket server listening on: %s/ws\n", cfg.Port)
-		if err := http.ListenAndServe(":"+cfg.Port, nil); err != nil{
-			log.Fatalf("HTTP server failed: %v", err)
-		}
-	}()
-
-
 	// Initialize bin chan using buffered chan so the dispatcher doesn't get stuck if the workers are momentarily busy
 	taskChan := make(chan worker.Task, 100)
 	resultChan := make(chan probe.Result, 100)
@@ -77,9 +66,35 @@ func main() {
 	fmt.Println("Starting worker pool")
 	worker.StartPool(ctx, 10, taskChan, resultChan)
 
-	// Dispatcher
-	fmt.Println("Starting Dispatcher")
-	dispatcher.Run(ctx, cfg.Monitors, taskChan)
+	// Control channel for dynamic updates
+	controlChan := make(chan config.MonitorConfig, 10)
+
+	r := chi.NewRouter()
+
+	// API setup and Websocket routes
+	apiHandler := api.NewHandler(s, controlChan)
+
+
+	
+	r.Handle("/ws", hub)
+	r.Mount("/api", apiHandler.Routes())
+
+
+	// Load existing monitors from DB on startup
+	existing, _ := s.GetMonitors(ctx)
+	for _, m := range existing {
+		controlChan <- m
+	}
+
+	go func() {
+    fmt.Printf("🌐 Server listening on :%s\n", cfg.Port)
+    if err := http.ListenAndServe(":"+cfg.Port, r); err != nil {
+        log.Fatalf(" HTTP server failed: %v", err)
+    }
+	}()
+
+
+	go dispatcher.Run(ctx, taskChan, controlChan)
 
 
 
