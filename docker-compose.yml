@@ -23,9 +23,10 @@ services:
       - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U user -d strobe"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 60s
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
