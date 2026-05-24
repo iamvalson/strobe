@@ -226,6 +226,7 @@ export default function MonitorDetail({
 
   const wsRef = useRef<WebSocket | null>(null);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(false);
 
   /* ── Fetch history ─────────────────────────────────────── */
   const fetchHistory = useCallback(async () => {
@@ -248,6 +249,7 @@ export default function MonitorDetail({
 
   /* ── WebSocket ─────────────────────────────────────────── */
   const connectWS = useCallback(() => {
+    if (!mountedRef.current) return;
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
     const ws = new WebSocket(getWsUrl());
     wsRef.current = ws;
@@ -296,8 +298,10 @@ export default function MonitorDetail({
   }, [monitorId]);
 
   useEffect(() => {
+    mountedRef.current = true;
     connectWS();
     return () => {
+      mountedRef.current = false;
       wsRef.current?.close();
       if (retryRef.current) clearTimeout(retryRef.current);
     };

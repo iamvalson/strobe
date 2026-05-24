@@ -58,9 +58,11 @@ export default function Dashboard({ initialMonitors }: { initialMonitors: Monito
 
   const wsRef = useRef<WebSocket | null>(null);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(false);
 
   /* WebSocket */
   const connectWS = useCallback(() => {
+    if (!mountedRef.current) return;
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
     const wsUrl = getWsUrl();
 
@@ -128,9 +130,11 @@ export default function Dashboard({ initialMonitors }: { initialMonitors: Monito
       })
       .catch(() => {});
 
+    mountedRef.current = true;
     connectWS();
 
     return () => {
+      mountedRef.current = false;
       wsRef.current?.close();
       if (retryRef.current) clearTimeout(retryRef.current);
     };
