@@ -9,12 +9,14 @@ import (
 
 // Monitor parameters for health checks
 type MonitorConfig struct {
-	ID			string			`json:"id"`
-	URL			string			`json:"url"`
-	Interval	time.Duration	`json:"-"`
-	Timeout		time.Duration	`json:"-"`
-	RawInterval	string			`json:"interval"`	
-	RawTimeout	string			`json:"timeout"`
+	ID             string        `json:"id"`
+	URL            string        `json:"url"`
+	Interval       time.Duration `json:"-"`
+	Timeout        time.Duration `json:"-"`
+	RawInterval    string        `json:"interval"`
+	RawTimeout     string        `json:"timeout"`
+	Disabled       bool          `json:"disabled"`
+	DisabledReason string        `json:"disabled_reason,omitempty"`
 }
 
 

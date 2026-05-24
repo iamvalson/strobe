@@ -9,12 +9,16 @@ import (
 )
 
 type Result struct {
-	MonitorID  string
-	URL        string
-	StatusCode int
-	RTT        time.Duration
-	Error      error
-	CheckedAt  time.Time
+	MonitorID      string
+	URL            string
+	StatusCode     int
+	RTT            time.Duration
+	Error          error
+	CheckedAt      time.Time
+	// Disabled is set to true (by main.go) when this result is the one that
+	// triggers an auto-disable so the frontend can update without polling.
+	Disabled       bool
+	DisabledReason string
 }
 
 

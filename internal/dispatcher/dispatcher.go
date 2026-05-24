@@ -8,46 +8,46 @@ import (
 	"github.com/iamvalson/strobe/internal/worker"
 )
 
-// Run func starts a dedicated goroutine for every monitor to track its own interval
-func Run(ctx context.Context, taskChan chan<- worker.Task, controlChan <- chan config.MonitorConfig){
-	// Map to track the 'Stop' signal for every running monitor
+// Run starts a dedicated goroutine per monitor and hot-reloads config changes
+// received on controlChan. Sending a MonitorConfig with Disabled = true stops
+// that monitor's goroutine without restarting it.
+func Run(ctx context.Context, taskChan chan<- worker.Task, controlChan <-chan config.MonitorConfig) {
+	// cancel funcs for every running monitor goroutine
 	running := make(map[string]context.CancelFunc)
-
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		
-		case m := <- controlChan:
-			// If this monitor is already running stop the old version first
-			if stopOld, exists := running[m.ID]; exists{
-				stopOld()
+
+		case m := <-controlChan:
+			// Always cancel the old goroutine first (handles URL / interval updates)
+			if stop, exists := running[m.ID]; exists {
+				stop()
+				delete(running, m.ID)
 			}
 
-			// Create a child context specifically for this monitor's goroutine
+			// Disabled monitors are parked — don't restart them.
+			if m.Disabled {
+				continue
+			}
+
 			mCtx, cancel := context.WithCancel(ctx)
 			running[m.ID] = cancel
 
-			// Spawn the goroutine for this specific monitor
 			go func(mon config.MonitorConfig, monCtx context.Context) {
-			ticker := time.NewTicker(mon.Interval)
-			defer ticker.Stop()
+				ticker := time.NewTicker(mon.Interval)
+				defer ticker.Stop()
 
-			for {
-				select {
-				case <- monCtx.Done():
-					return
-
-				case <- ticker.C:
-					// Send task to the workers
-
-					taskChan <- worker.Task{Monitor: mon}
+				for {
+					select {
+					case <-monCtx.Done():
+						return
+					case <-ticker.C:
+						taskChan <- worker.Task{Monitor: mon}
+					}
 				}
-			}
-		}(m, mCtx)
+			}(m, mCtx)
 		}
 	}
-
-	
 }
