@@ -1,5 +1,7 @@
 # Strobe
 
+![Strobe Dashboard Banner](./assets/dashboard-demo.gif)
+
 Strobe is a high-precision uptime monitoring engine built for real-time observability of HTTP endpoints. Designed around Go's concurrency primitives, it manages hundreds of simultaneous probes with a minimal memory footprint — streaming live telemetry to a Next.js dashboard over WebSocket the moment a result lands.
 
 ---
@@ -62,14 +64,14 @@ A thread-safe broadcast center protected by a `sync.Mutex`. `Run()` fans each `p
 **REST API** (`internal/api`)
 Chi v5 router mounted at `/api`:
 
-| Method   | Path                         | Description                         |
-|----------|------------------------------|-------------------------------------|
-| `GET`    | `/api/monitors`              | List all monitors                   |
-| `POST`   | `/api/monitors`              | Create a monitor                    |
-| `PATCH`  | `/api/monitors/{id}`         | Update URL / interval / timeout     |
-| `DELETE` | `/api/monitors/{id}`         | Delete monitor and all its history  |
-| `POST`   | `/api/monitors/{id}/enable`  | Re-enable a disabled monitor        |
-| `GET`    | `/api/monitors/{id}/history` | Fetch check history (`?since=1h`)   |
+| Method   | Path                         | Description                        |
+| -------- | ---------------------------- | ---------------------------------- |
+| `GET`    | `/api/monitors`              | List all monitors                  |
+| `POST`   | `/api/monitors`              | Create a monitor                   |
+| `PATCH`  | `/api/monitors/{id}`         | Update URL / interval / timeout    |
+| `DELETE` | `/api/monitors/{id}`         | Delete monitor and all its history |
+| `POST`   | `/api/monitors/{id}/enable`  | Re-enable a disabled monitor       |
+| `GET`    | `/api/monitors/{id}/history` | Fetch check history (`?since=1h`)  |
 
 **Next.js Dashboard** (`ui/`)
 Server-renders the initial monitor list, then hydrates into a live React state map driven by a single WebSocket connection per page. A `mountedRef` guard prevents React StrictMode's double-mount from opening duplicate connections. Includes a per-monitor detail page with RTT history sparkline, a settings panel, a re-enable banner for auto-disabled monitors, and a two-click delete confirmation flow.
@@ -78,13 +80,13 @@ Server-renders the initial monitor list, then hydrates into a live React state m
 
 ## Tech Stack
 
-| Layer       | Technology                                      |
-|-------------|-------------------------------------------------|
-| **Backend** | Go 1.26, Chi v5, Gorilla WebSocket, pgx/v5      |
-| **Frontend**| Next.js (App Router), TypeScript, Tailwind CSS  |
-| **Database**| PostgreSQL 16 (historical telemetry)            |
-| **Cache**   | Redis 8.6 (last-known-status)                   |
-| **Infra**   | Docker, Docker Compose                          |
+| Layer        | Technology                                     |
+| ------------ | ---------------------------------------------- |
+| **Backend**  | Go 1.26, Chi v5, Gorilla WebSocket, pgx/v5     |
+| **Frontend** | Next.js (App Router), TypeScript, Tailwind CSS |
+| **Database** | PostgreSQL 16 (historical telemetry)           |
+| **Cache**    | Redis 8.6 (last-known-status)                  |
+| **Infra**    | Docker, Docker Compose                         |
 
 ---
 
@@ -107,6 +109,7 @@ cp ui/.env.example ui/.env.local
 ```
 
 `.env` (backend):
+
 ```env
 DATABASE_URL=postgres://user:password@localhost:5432/strobe?sslmode=disable
 REDIS_URL=localhost:6379
@@ -114,6 +117,7 @@ PORT=8080
 ```
 
 `ui/.env.local` (frontend):
+
 ```env
 NEXT_PUBLIC_API_URL=http://localhost:8080
 NEXT_PUBLIC_WS_URL=ws://localhost:8080/ws
@@ -191,7 +195,9 @@ Every mutation that affects a running monitor — create, update, delete, auto-d
 The global shutdown context flows from `main.go` into every worker's `context.WithTimeout`. A single `Ctrl+C` cancels every in-flight HTTP probe and every goroutine in the dispatcher simultaneously. No goroutine leaks, no zombie connections waiting to time out.
 
 **`mountedRef` instead of state for WS guards**
-React state writes are asynchronous — setting a flag in `useState` can't guarantee the new value is visible before the next render cycle. A `useRef` write is synchronous and immediate, so setting `mountedRef.current = false` as the *first* line of the cleanup function guarantees that any `onclose`-triggered reconnect that fires after unmount will see the flag and bail before opening a new connection. Using state here would race against the async close event.
+React state writes are asynchronous — setting a flag in `useState` can't guarantee the new value is visible before the next render cycle. A `useRef` write is synchronous and immediate, so setting `mountedRef.current = false` as the _first_
+**`mountedRef` instead of state for WS guards**
+React state writes are asynchronous — setting a flag in `useState` can't guarantee the new value is visible before the next render cycle. A `useRef` write is synchronous and immediate, so setting `mountedRef.current = false` as the _first_ line of the cleanup function guarantees that any `onclose`-triggered reconnect that fires after unmount will see the flag and bail before opening a new connection. Using state here would race against the async close event.
 
 **Disabled flag on the WS result**
 When auto-disable triggers, the UI needs to flip the monitor card to "paused" immediately — before the next API poll. Stamping `Disabled: true` and `DisabledReason` onto the specific `probe.Result` that crosses the DNS failure threshold lets the dashboard update in the same tick the result is broadcast, with no extra HTTP round-trip.
