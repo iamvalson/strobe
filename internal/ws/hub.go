@@ -12,9 +12,8 @@ import (
 
 var upgrader = websocket.Upgrader{
 	// Allow react to connect
-	CheckOrigin: func(r *http.Request) bool {return true},
+	CheckOrigin: func(r *http.Request) bool { return true },
 }
-
 
 type Hub struct {
 	// Registered clients
@@ -27,35 +26,35 @@ type Hub struct {
 	mu sync.Mutex
 }
 
-
-
 func NewHub() *Hub {
 	return &Hub{
-		clients: make(map[*websocket.Conn]bool),
+		clients:   make(map[*websocket.Conn]bool),
 		broadcast: make(chan probe.Result),
 	}
 }
 
-
-// Hub service
+// Run fans out each probe result to every connected browser.
 func (h *Hub) Run() {
 	for {
-		// Wait for new result from a worker
 		res := <-h.broadcast
 
 		out := struct {
-			MonitorID  string  `json:"monitor_id"`
-			URL        string  `json:"url"`
-			StatusCode int     `json:"status_code"`
-			RTT        int64   `json:"rtt_ms"`
-			Error      string  `json:"error"`
-			CheckedAt  string  `json:"checked_at"`
+			MonitorID      string `json:"monitor_id"`
+			URL            string `json:"url"`
+			StatusCode     int    `json:"status_code"`
+			RTT            int64  `json:"rtt_ms"`
+			Error          string `json:"error"`
+			CheckedAt      string `json:"checked_at"`
+			Disabled       bool   `json:"disabled,omitempty"`
+			DisabledReason string `json:"disabled_reason,omitempty"`
 		}{
-			MonitorID:  res.MonitorID,
-			URL:        res.URL,
-			StatusCode: res.StatusCode,
-			RTT:        res.RTT.Milliseconds(),
-			CheckedAt:  res.CheckedAt.Format("15:04:05"),
+			MonitorID:      res.MonitorID,
+			URL:            res.URL,
+			StatusCode:     res.StatusCode,
+			RTT:            res.RTT.Milliseconds(),
+			CheckedAt:      res.CheckedAt.Format("15:04:05"),
+			Disabled:       res.Disabled,
+			DisabledReason: res.DisabledReason,
 		}
 
 		if res.Error != nil {
@@ -65,25 +64,21 @@ func (h *Hub) Run() {
 		payload, _ := json.Marshal(out)
 
 		h.mu.Lock()
-
 		for client := range h.clients {
-			err := client.WriteMessage(websocket.TextMessage, payload)
-
-			if err != nil {
-				log.Printf("Websocket error: %v", err)
-
+			if err := client.WriteMessage(websocket.TextMessage, payload); err != nil {
+				// Write failed — client already gone; clean up silently.
 				client.Close()
 				delete(h.clients, client)
 			}
 		}
-
 		h.mu.Unlock()
 	}
 }
 
-
-
-// ServeHTTP handles websocket requests from the peer
+// ServeHTTP upgrades the connection and registers the client.
+// A per-connection read goroutine is required by gorilla/websocket:
+// it keeps the connection healthy (handles pings/pongs) and detects
+// client-side disconnects without waiting for the next write to fail.
 func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -93,13 +88,32 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	h.mu.Lock()
 	h.clients[conn] = true
+	n := len(h.clients)
 	h.mu.Unlock()
 
-	log.Printf("New browser connected. Total clients: %d", len(h.clients))
+	log.Printf("Browser connected. Total clients: %d", n)
+
+	// Read loop: drains client frames (browsers rarely send any, but
+	// gorilla/websocket needs this to process control frames like pings and
+	// close handshakes). When ReadMessage returns the client has disconnected.
+	go func() {
+		defer func() {
+			h.mu.Lock()
+			delete(h.clients, conn)
+			remaining := len(h.clients)
+			h.mu.Unlock()
+			conn.Close()
+			log.Printf("Browser disconnected. Total clients: %d", remaining)
+		}()
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
 }
 
-
-// Send a result to the hub channel
+// Broadcast sends a result to the hub channel.
 func (h *Hub) Broadcast(res probe.Result) {
 	h.broadcast <- res
 }

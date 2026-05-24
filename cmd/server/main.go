@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/go-chi/chi/v5"
@@ -19,6 +20,21 @@ import (
 	"github.com/iamvalson/strobe/internal/ws"
 )
 
+// dnsFailThreshold is the number of consecutive "no such host" errors after
+// which a monitor is automatically disabled to stop wasting resources.
+const dnsFailThreshold = 3
+
+// isDNSNotFound returns true when the error is a permanent DNS resolution
+// failure (the domain simply does not exist).
+func isDNSNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "no such host") ||
+		strings.Contains(msg, "name does not exist") ||
+		strings.Contains(msg, "NXDOMAIN")
+}
 
 func main() {
 	if os.Getenv("DATABASE_URL") == "" {
@@ -26,101 +42,125 @@ func main() {
 	}
 
 	cfg, err := config.Load()
-	if err != nil{
+	if err != nil {
 		log.Fatalf("CONFIG ERROR: %v", err)
 	}
 
 	fmt.Println("Strobe Monitoring Engine Initialized")
 
-
 	// Graceful Shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	// Intialize Store
+	// Initialise Store
 	s, err := store.New(ctx, cfg.DatabaseURL, cfg.RedisURL)
 	if err != nil {
 		log.Fatalf("STORE ERROR: %v", err)
 	}
-
 	defer s.Close()
 
-	// Run migration
+	// Run migrations
 	fmt.Println("Running database migrations...")
 	if err := s.Migrate(ctx); err != nil {
 		log.Fatalf("MIGRATION ERROR: %v", err)
 	}
 
-
-
-	// Initialize websocket hub
+	// WebSocket hub
 	hub := ws.NewHub()
 	go hub.Run()
 
-
-	// Initialize bin chan using buffered chan so the dispatcher doesn't get stuck if the workers are momentarily busy
 	taskChan := make(chan worker.Task, 100)
 	resultChan := make(chan probe.Result, 100)
 
-	// Worker Pool
 	fmt.Println("Starting worker pool")
 	worker.StartPool(ctx, 10, taskChan, resultChan)
 
-	// Control channel for dynamic updates
 	controlChan := make(chan config.MonitorConfig, 10)
 
 	r := chi.NewRouter()
-
-	// API setup and Websocket routes
 	apiHandler := api.NewHandler(s, controlChan)
-
-
-	
 	r.Handle("/ws", hub)
 	r.Mount("/api", apiHandler.Routes())
 
-
-	// Load existing monitors from DB on startup
+	// Load existing monitors from DB — skip any that are already disabled.
 	existing, _ := s.GetMonitors(ctx)
 	for _, m := range existing {
-		controlChan <- m
+		if !m.Disabled {
+			controlChan <- m
+		} else {
+			fmt.Printf("[%s] Skipping disabled monitor (%s)\n", m.ID, m.DisabledReason)
+		}
 	}
 
 	go func() {
-    fmt.Printf("🌐 Server listening on :%s\n", cfg.Port)
-    if err := http.ListenAndServe(":"+cfg.Port, r); err != nil {
-        log.Fatalf(" HTTP server failed: %v", err)
-    }
+		fmt.Printf("🌐 Server listening on :%s\n", cfg.Port)
+		if err := http.ListenAndServe(":"+cfg.Port, r); err != nil {
+			log.Fatalf("HTTP server failed: %v", err)
+		}
 	}()
-
 
 	go dispatcher.Run(ctx, taskChan, controlChan)
 
-
-
 	fmt.Println("Strobe Engine is LIVE. Press Ctrl+C to stop")
+
+	// consecutiveDNSFails tracks how many back-to-back "no such host" errors
+	// each monitor has produced. Reset to 0 on any successful check.
+	consecutiveDNSFails := make(map[string]int)
 
 	for {
 		select {
-		case <- ctx.Done():
+		case <-ctx.Done():
 			fmt.Println("\nShutting down Strobe...")
 			return
-		
+
 		case res := <-resultChan:
-			// Save to Database
-			if err := s.SaveResult(ctx, res); err != nil{
+			// ── DNS auto-disable logic ──────────────────────────────
+			if isDNSNotFound(res.Error) {
+				consecutiveDNSFails[res.MonitorID]++
+				n := consecutiveDNSFails[res.MonitorID]
+
+				log.Printf("[%s] DNS failure %d/%d: %v", res.MonitorID, n, dnsFailThreshold, res.Error)
+
+				if n >= dnsFailThreshold {
+					reason := res.Error.Error()
+					log.Printf("[%s] Auto-disabling after %d consecutive DNS failures", res.MonitorID, n)
+
+					if dbErr := s.DisableMonitor(ctx, res.MonitorID, reason); dbErr != nil {
+						log.Printf("[%s] Failed to persist disabled state: %v", res.MonitorID, dbErr)
+					}
+
+					// Signal dispatcher to stop the goroutine.
+					controlChan <- config.MonitorConfig{
+						ID:             res.MonitorID,
+						URL:            res.URL,
+						Disabled:       true,
+						DisabledReason: reason,
+					}
+
+					// Mark the result so the WS broadcast tells the frontend
+					// to flip this monitor's card to the "paused" state immediately.
+					res.Disabled = true
+					res.DisabledReason = reason
+
+					delete(consecutiveDNSFails, res.MonitorID)
+				}
+			} else {
+				// Any non-DNS-failure (including transient errors or success) resets the counter.
+				consecutiveDNSFails[res.MonitorID] = 0
+			}
+
+			// ── Persist & broadcast ─────────────────────────────────
+			if err := s.SaveResult(ctx, res); err != nil {
 				fmt.Printf("Database Save Error: %v\n", err)
 			}
 
 			hub.Broadcast(res)
 
-			// Logs
 			if res.Error != nil {
 				fmt.Printf("[%s] %s -> Error: %v\n", res.MonitorID, res.URL, res.Error)
-			} else{
+			} else {
 				fmt.Printf("[%s] %s -> %d (%v)\n", res.MonitorID, res.URL, res.StatusCode, res.RTT)
 			}
-
+		}
 	}
-}
 }

@@ -16,3 +16,6 @@ docker-down:
 
 build:
 	go build -o bin/strobe ./cmd/server/main.go
+
+run:
+	go run ./cmd/server/main.go
