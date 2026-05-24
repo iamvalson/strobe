@@ -37,10 +37,6 @@ func isDNSNotFound(err error) bool {
 }
 
 func main() {
-	if os.Getenv("DATABASE_URL") == "" {
-		os.Setenv("DATABASE_URL", "postgres://user:password@localhost:5432/strobe?sslmode=disable")
-	}
-
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("CONFIG ERROR: %v", err)
